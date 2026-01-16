@@ -16,11 +16,51 @@ Perfect for GitOps reviews, CI checks, configuration drift detection, and any sc
 
 ## Installation
 
+### CLI Tool
+
+```bash
+# Homebrew (macOS/Linux)
+brew install pfrederiksen/tap/configdiff
+
+# Or download binaries from GitHub releases
+# https://github.com/pfrederiksen/configdiff/releases
+```
+
+### Go Library
+
 ```bash
 go get github.com/pfrederiksen/configdiff
 ```
 
 ## Quick Start
+
+### CLI Usage
+
+```bash
+# Basic comparison
+configdiff old.yaml new.yaml
+
+# Compare with stdin
+kubectl get deploy myapp -o yaml | configdiff old.yaml -
+
+# Different output formats
+configdiff old.yaml new.yaml -o compact
+configdiff old.yaml new.yaml -o json
+configdiff old.yaml new.yaml -o patch
+
+# Ignore specific paths
+configdiff old.yaml new.yaml -i /metadata/generation -i /status/*
+
+# Array-as-set comparison
+configdiff old.yaml new.yaml --array-key /spec/containers=name
+
+# Exit code mode for CI
+if configdiff old.yaml new.yaml --exit-code; then
+  echo "No changes detected"
+fi
+```
+
+### Library Usage
 
 ```go
 package main
@@ -66,6 +106,48 @@ env: production
     fmt.Println(string(patchJSON))
 }
 ```
+
+## CLI Reference
+
+### Flags
+
+```
+Format Options:
+  -f, --format string          Input format (yaml, json, auto) (default "auto")
+      --old-format string      Old file format override
+      --new-format string      New file format override
+
+Diff Options:
+  -i, --ignore strings         Paths to ignore (can be repeated)
+      --array-key strings      Array paths to key fields (format: path=key)
+      --numeric-strings        Coerce numeric strings to numbers
+      --bool-strings           Coerce bool strings to booleans
+      --stable-order           Sort output deterministically (default true)
+
+Output Options:
+  -o, --output string          Output format (report, compact, json, patch) (default "report")
+      --no-color               Disable colored output
+      --max-value-length int   Truncate values longer than N chars (default 80)
+  -q, --quiet                  Quiet mode (no output)
+      --exit-code              Exit with code 1 if differences found
+
+Other:
+  -h, --help                   Help for configdiff
+  -v, --version                Version information
+```
+
+### Output Formats
+
+- **report** (default): Detailed human-friendly report with values
+- **compact**: Summary with paths only
+- **json**: JSON-serialized changes array
+- **patch**: JSON Patch (RFC 6902) format
+
+### Exit Codes
+
+- `0`: Success (no differences, or differences displayed)
+- `1`: Differences found (when using `--exit-code`)
+- `1`: Error occurred
 
 ## Features
 
@@ -425,11 +507,88 @@ type Options struct {
 
 ## Use Cases
 
-- **GitOps Reviews**: Understand exactly what changed in infrastructure configs
-- **CI/CD Checks**: Validate configuration changes before deployment
-- **Drift Detection**: Compare actual vs desired state in deployed systems
-- **Configuration Management**: Track changes across environments
-- **Multi-Format Comparison**: Compare YAML and JSON representations of the same config
+### Kubernetes Deployment Reviews
+
+```bash
+# Compare deployed config vs source
+kubectl get deployment myapp -o yaml > deployed.yaml
+configdiff deploy/myapp.yaml deployed.yaml -i /metadata/generation -i /status/*
+
+# Review Helm chart changes
+helm template myapp ./chart --values prod.yaml > new.yaml
+configdiff current-prod.yaml new.yaml --array-key /spec/template/spec/containers=name
+```
+
+### GitOps Pull Request Validation
+
+```bash
+# In CI pipeline - fail if unexpected changes
+git show main:config/production.yaml > old.yaml
+configdiff old.yaml config/production.yaml \
+  -i /metadata/annotations/last-modified \
+  --exit-code || echo "Configuration changes detected"
+```
+
+### Infrastructure Drift Detection
+
+```bash
+# Compare actual vs desired state
+terraform show -json > actual.json
+configdiff desired-state.json actual.json \
+  -o compact \
+  --ignore /timestamps/* \
+  --ignore /metadata/id
+```
+
+### Configuration Management
+
+```bash
+# Compare configs across environments
+configdiff config/staging.yaml config/production.yaml \
+  --array-key /services=name \
+  --array-key /databases=host
+
+# Cross-format validation (YAML source, JSON API)
+curl -s https://api.example.com/config > api-config.json
+configdiff local-config.yaml api-config.json \
+  --numeric-strings \
+  --bool-strings
+```
+
+### CI/CD Integration
+
+```yaml
+# GitHub Actions example
+- name: Validate config changes
+  run: |
+    configdiff old-config.yaml new-config.yaml --exit-code
+  continue-on-error: false
+
+# Only specific paths allowed to change
+- name: Check for unexpected changes
+  run: |
+    if configdiff base.yaml new.yaml -i /version -i /timestamp --quiet --exit-code; then
+      echo "Only version and timestamp changed - OK"
+    else
+      echo "Unexpected changes detected - review required"
+      exit 1
+    fi
+```
+
+### Docker Compose Migration
+
+```bash
+# Compare v2 vs v3 compose files
+configdiff docker-compose-v2.yaml docker-compose-v3.yaml \
+  --array-key /services=name \
+  -o report
+```
+
+**Key Benefits:**
+- Semantic understanding of configuration structure
+- Filter out noise (timestamps, auto-generated fields)
+- CI-friendly exit codes for automation
+- Multiple output formats for different use cases
 
 ## Testing
 
