@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,8 +119,9 @@ func compareFiles(oldFile, newFile string) (bool, error) {
 	}
 
 	// Format and output results (unless quiet mode)
+	var output string
 	if !quiet {
-		output, err := cli.FormatOutput(result, cli.OutputOptions{
+		output, err = cli.FormatOutput(result, cli.OutputOptions{
 			Format:         outputFormat,
 			NoColor:        noColor,
 			MaxValueLength: maxValueLength,
@@ -132,8 +135,17 @@ func compareFiles(oldFile, newFile string) (bool, error) {
 		fmt.Println(output)
 	}
 
+	// Write GitHub Actions outputs if in GHA environment
+	hasChanges := cli.HasChanges(result)
+	if githubOutput := os.Getenv("GITHUB_OUTPUT"); githubOutput != "" {
+		if err := writeGitHubOutputs(githubOutput, hasChanges, output); err != nil {
+			// Log error but don't fail the command
+			fmt.Fprintf(os.Stderr, "Warning: Failed to write GitHub Actions outputs: %v\n", err)
+		}
+	}
+
 	// Return whether changes were found
-	return cli.HasChanges(result), nil
+	return hasChanges, nil
 }
 
 // compareDirectories recursively compares two directories.
@@ -254,4 +266,33 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+// writeGitHubOutputs writes GitHub Actions outputs to the GITHUB_OUTPUT file
+func writeGitHubOutputs(outputFile string, hasChanges bool, diffOutput string) error {
+	f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Write has-changes output
+	if _, err := fmt.Fprintf(f, "has-changes=%v\n", hasChanges); err != nil {
+		return err
+	}
+
+	// Generate random delimiter to prevent injection attacks
+	// See: https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#multiline-strings
+	delimiterBytes := make([]byte, 16)
+	if _, err := rand.Read(delimiterBytes); err != nil {
+		return fmt.Errorf("failed to generate random delimiter: %w", err)
+	}
+	delimiter := "ghadelimiter_" + hex.EncodeToString(delimiterBytes)
+
+	// Write diff-output using heredoc format with random delimiter
+	if _, err := fmt.Fprintf(f, "diff-output<<%s\n%s\n%s\n", delimiter, diffOutput, delimiter); err != nil {
+		return err
+	}
+
+	return nil
 }
